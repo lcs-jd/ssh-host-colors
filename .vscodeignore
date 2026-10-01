@@ -4,3 +4,4 @@
 *.vsix
 node_modules/**
 images/screenshot-*.png
+README.*.md

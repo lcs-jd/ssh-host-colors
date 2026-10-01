@@ -3,33 +3,34 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.SshHostColors = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
+  // Libellés en anglais : ce sont les clés de traduction (l10n/bundle.l10n.*.json).
   const ZONES = [
-    { id: 'titleBar', label: 'Barre de titre', description: 'Tout le bandeau en haut de la fenêtre' },
-    { id: 'commandCenter', label: 'Centre de commandes', description: 'La barre de recherche au milieu du titre' },
-    { id: 'activityBar', label: "Barre d'activité", description: 'La colonne d’icônes à gauche' },
-    { id: 'statusBar', label: "Barre d'état", description: 'Le bandeau tout en bas' },
-    { id: 'remoteIndicator', label: 'Indicateur distant', description: 'Le bouton « SSH: … » en bas à gauche' },
-    { id: 'activeTab', label: 'Onglet actif', description: 'Liseré au-dessus de l’onglet ouvert' },
-    { id: 'sideBarBorder', label: 'Bordure latérale', description: 'Trait entre l’explorateur et l’éditeur' },
-    { id: 'panelBorder', label: 'Bordure du panneau', description: 'Trait au-dessus du terminal' },
-    { id: 'windowBorder', label: 'Bordure de fenêtre', description: 'Cadre autour de la fenêtre (Windows/Linux)' },
+    { id: 'titleBar', label: 'Title bar', description: 'The whole strip at the top of the window' },
+    { id: 'commandCenter', label: 'Command Center', description: 'The search box in the middle of the title bar' },
+    { id: 'activityBar', label: 'Activity bar', description: 'The column of icons on the left' },
+    { id: 'statusBar', label: 'Status bar', description: 'The strip at the very bottom' },
+    { id: 'remoteIndicator', label: 'Remote indicator', description: 'The “SSH: …” button at the bottom left' },
+    { id: 'activeTab', label: 'Active tab', description: 'Line above the open tab' },
+    { id: 'sideBarBorder', label: 'Side bar border', description: 'Line between the explorer and the editor' },
+    { id: 'panelBorder', label: 'Panel border', description: 'Line above the terminal' },
+    { id: 'windowBorder', label: 'Window border', description: 'Frame around the window (Windows/Linux)' },
   ];
 
   const DEFAULT_ZONES = ['titleBar', 'activityBar', 'statusBar'];
 
   const PRESETS = [
-    { label: 'Rouge', color: '#c0392b' },
+    { label: 'Red', color: '#c0392b' },
     { label: 'Orange', color: '#d35400' },
-    { label: 'Jaune', color: '#f1c40f' },
-    { label: 'Vert', color: '#27ae60' },
-    { label: 'Turquoise', color: '#16a085' },
+    { label: 'Yellow', color: '#f1c40f' },
+    { label: 'Green', color: '#27ae60' },
+    { label: 'Teal', color: '#16a085' },
     { label: 'Cyan', color: '#0097a7' },
-    { label: 'Bleu', color: '#2980b9' },
+    { label: 'Blue', color: '#2980b9' },
     { label: 'Indigo', color: '#3f51b5' },
-    { label: 'Violet', color: '#8e44ad' },
-    { label: 'Rose', color: '#e84393' },
-    { label: 'Marron', color: '#795548' },
-    { label: 'Gris', color: '#607d8b' },
+    { label: 'Purple', color: '#8e44ad' },
+    { label: 'Pink', color: '#e84393' },
+    { label: 'Brown', color: '#795548' },
+    { label: 'Gray', color: '#607d8b' },
   ];
 
   /** @returns {[number, number, number] | undefined} */

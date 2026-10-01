@@ -1,6 +1,7 @@
 // @ts-check
 const vscode = require('vscode');
 const colors = require('../media/colors.js');
+const targets = require('../media/targets.js');
 
 const SECTION = 'sshHostColors';
 
@@ -52,22 +53,26 @@ function wildcardRegex(pattern) {
 }
 
 /**
- * Trouve l'entrée correspondant à un host : nom exact, puis sans « user@ »,
- * puis motifs à jokers (le plus spécifique d'abord).
+ * Trouve l'entrée correspondant à une clé : nom exact, puis sans « user@ » (SSH),
+ * puis motifs à jokers (le plus spécifique d'abord). Un motif ne s'applique qu'aux
+ * clés de même type : « * » ne vise que les hosts SSH, « folder:* » que les dossiers.
  * @param {string} host
  * @returns {HostEntry | undefined}
  */
 function findEntry(host) {
   const entries = listEntries();
+  const kind = targets.kindOf(host);
   const candidates = [host.toLowerCase()];
   const at = host.lastIndexOf('@');
-  if (at >= 0) candidates.push(host.slice(at + 1).toLowerCase());
+  if (kind === 'ssh' && at >= 0) candidates.push(host.slice(at + 1).toLowerCase());
 
   for (const c of candidates) {
     const exact = entries.find((e) => e.key.toLowerCase() === c);
     if (exact) return exact;
   }
-  const patterns = entries.filter((e) => /[*?]/.test(e.key)).sort((a, b) => b.key.length - a.key.length);
+  const patterns = entries
+    .filter((e) => /[*?]/.test(e.key) && targets.kindOf(e.key) === kind)
+    .sort((a, b) => b.key.length - a.key.length);
   for (const c of candidates) {
     const hit = patterns.find((e) => wildcardRegex(e.key).test(c));
     if (hit) return hit;
@@ -143,8 +148,58 @@ async function setDefaultZones(zones) {
   await vscode.workspace.getConfiguration(SECTION).update('elements', zones, vscode.ConfigurationTarget.Global);
 }
 
+/** Configuration à exporter : entrées brutes et zones par défaut. */
+function exportData() {
+  return { sshHostColors: 1, hosts: rawHosts(), elements: defaultZones() };
+}
+
+/**
+ * Lit un fichier exporté. Accepte aussi un simple objet { clé: couleur } ou
+ * un extrait de settings.json ({ "sshHostColors.hosts": … }).
+ * @param {unknown} data
+ * @returns {{ entries: HostEntry[], skipped: number, elements?: string[] }}
+ */
+function parseImport(data) {
+  const d = /** @type {any} */ (data);
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return { entries: [], skipped: 0 };
+  const map = d.hosts ?? d['sshHostColors.hosts'] ?? (d.sshHostColors === undefined ? d : {});
+  const entries = [];
+  let skipped = 0;
+  for (const [k, v] of Object.entries(map && typeof map === 'object' ? map : {})) {
+    const key = k.trim();
+    const e = key ? normalize(key, v) : undefined;
+    if (e) entries.push(e);
+    else skipped++;
+  }
+  const rawZones = d.elements ?? d['sshHostColors.elements'];
+  const known = new Set(colors.ZONES.map((z) => z.id));
+  const elements = Array.isArray(rawZones) ? rawZones.filter((z) => known.has(z)) : undefined;
+  return { entries, skipped, elements };
+}
+
+/**
+ * Fusionne (les entrées importées l'emportent) ou remplace la configuration.
+ * @param {HostEntry[]} entries
+ * @param {'merge' | 'replace'} mode
+ * @param {string[]} [elements] zones par défaut, appliquées seulement en mode « remplacer »
+ */
+async function importEntries(entries, mode, elements) {
+  /** @type {Record<string, unknown>} */
+  const out = mode === 'replace' ? {} : rawHosts();
+  for (const { key, ...data } of entries) {
+    // Les clés sont insensibles à la casse : on remplace aussi « Prod » par « prod ».
+    for (const k of Object.keys(out)) if (k.toLowerCase() === key.toLowerCase()) delete out[k];
+    out[key] = serialize(data);
+  }
+  await writeHosts(out);
+  if (mode === 'replace' && elements) await setDefaultZones(elements);
+}
+
 module.exports = {
   SECTION,
+  exportData,
+  parseImport,
+  importEntries,
   listEntries,
   findEntry,
   defaultZones,

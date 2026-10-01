@@ -1,8 +1,11 @@
 // @ts-check
 const vscode = require('vscode');
+const { l10n } = vscode;
 const colors = require('../media/colors.js');
+const targets = require('../media/targets.js');
 const hosts = require('./hosts');
 const { ManagerPanel } = require('./panel');
+const transfer = require('./transfer');
 
 const STATE_KEY = 'sshHostColors.applied';
 
@@ -21,7 +24,7 @@ let previewEntry;
 function activate(context) {
   ctx = context;
   statusItem = vscode.window.createStatusBarItem('sshHostColors.host', vscode.StatusBarAlignment.Left, 10000);
-  statusItem.name = 'SSH Host Colors';
+  statusItem.name = 'Host Colors';
   statusItem.command = 'sshHostColors.menu';
 
   const reg = (/** @type {string} */ id, /** @type {(...a: any[]) => any} */ fn) =>
@@ -36,6 +39,8 @@ function activate(context) {
   reg('sshHostColors.cleanWorkspace', cleanWorkspaceCommand);
   reg('sshHostColors.toggle', toggleCommand);
   reg('sshHostColors.refresh', apply);
+  reg('sshHostColors.export', transfer.exportCommand);
+  reg('sshHostColors.import', transfer.importCommand);
 
   context.subscriptions.push(
     statusItem,
@@ -56,30 +61,95 @@ function activate(context) {
 function deactivate() {}
 
 // ---------------------------------------------------------------------------
-// Détection du host
+// Détection de la fenêtre (environnement distant et dossier ouvert)
 // ---------------------------------------------------------------------------
 
-/** @returns {string | undefined} */
-function getSshHost() {
-  if (vscode.env.remoteName !== 'ssh-remote') return undefined;
+/** URI qui identifie la fenêtre : le fichier .code-workspace, sinon le premier dossier. */
+function windowUri() {
+  const file = vscode.workspace.workspaceFile;
+  return file && file.scheme !== 'untitled' ? file : vscode.workspace.workspaceFolders?.[0]?.uri;
+}
 
-  const uri = vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri;
-  if (!uri) return undefined;
+/**
+ * Certaines extensions distantes encodent l'authority en hexa (souvent du JSON).
+ * @param {string} raw
+ * @returns {unknown}
+ */
+function decodeHex(raw) {
+  if (!/^[0-9a-f]+$/i.test(raw) || raw.length % 2 !== 0) return undefined;
+  const text = Buffer.from(raw, 'hex').toString('utf8');
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
 
-  const match = /^ssh-remote\+(.+)$/.exec(decodeURIComponent(uri.authority));
+/**
+ * Clé de l'environnement distant de cette fenêtre (voir media/targets.js).
+ * @returns {string | undefined}
+ */
+function getRemoteKey() {
+  const remote = vscode.env.remoteName;
+  const uri = windowUri();
+  if (!remote || !uri) return undefined;
+
+  const match = /^[^+]+\+(.+)$/.exec(decodeURIComponent(uri.authority));
   if (!match) return undefined;
   const raw = match[1];
+  const decoded = /** @type {any} */ (decodeHex(raw));
 
-  // Les versions récentes de Remote-SSH encodent l'authority en hexa : {"hostName":"..."}
-  if (/^[0-9a-f]+$/i.test(raw) && raw.length % 2 === 0) {
-    try {
-      const json = JSON.parse(Buffer.from(raw, 'hex').toString('utf8'));
-      if (json && typeof json.hostName === 'string') return json.hostName;
-    } catch {
-      // pas du JSON hexa : on garde la valeur brute
+  switch (remote) {
+    case 'ssh-remote':
+      // Remote-SSH récent : {"hostName":"..."} en hexa
+      return typeof decoded?.hostName === 'string' ? decoded.hostName : raw;
+    case 'wsl':
+      return 'wsl:' + raw;
+    case 'dev-container':
+    case 'attached-container': {
+      let name;
+      if (typeof decoded?.containerName === 'string') name = decoded.containerName.replace(/^\//, '');
+      else if (typeof decoded?.hostPath === 'string') name = targets.basename(decoded.hostPath);
+      else if (typeof decoded === 'string') name = targets.basename(decoded);
+      return 'container:' + (name || targets.basename(uri.path));
     }
+    case 'codespaces':
+      return 'codespace:' + raw;
+    case 'tunnel':
+      return 'tunnel:' + raw;
+    default:
+      return undefined;
   }
-  return raw;
+}
+
+/**
+ * Clés possibles pour cette fenêtre.
+ * @returns {{ remote?: string, folder?: string }}
+ */
+function getWindowKeys() {
+  const remote = getRemoteKey();
+  const uri = windowUri();
+  // Pas de couleur par dossier pour un environnement distant non reconnu.
+  if (!uri || (vscode.env.remoteName && !remote)) return { remote };
+  const path = uri.scheme === 'file' ? uri.fsPath.replace(/\\/g, '/') : uri.path;
+  return { remote, folder: targets.folderKey(remote ?? '', path) };
+}
+
+/**
+ * Clé utilisée pour colorer cette fenêtre : le dossier s'il a sa propre couleur,
+ * sinon l'environnement distant, sinon le dossier (fenêtre locale).
+ * @returns {string | undefined}
+ */
+function getCurrentKey() {
+  const { remote, folder } = getWindowKeys();
+  if (folder && hosts.findEntry(folder)) return folder;
+  return remote ?? folder;
+}
+
+/** Nom lisible d'une clé, pour les titres et la barre d'état. */
+function displayName(/** @type {string} */ key) {
+  const d = targets.describe(key);
+  return d.kind === 'folder' ? l10n.t('Folder: {0}', d.name) : d.remote ?? key;
 }
 
 function hasWorkspace() {
@@ -109,7 +179,7 @@ function schedulePreview() {
 }
 
 async function applyNow() {
-  const host = getSshHost();
+  const host = getCurrentKey();
   const entry = host && isEnabled() ? previewEntry ?? hosts.findEntry(host) : undefined;
   const zones = entry ? entry.elements ?? hosts.defaultZones() : [];
   const wanted = entry ? colors.buildCustomizations(entry.color, zones) : {};
@@ -125,22 +195,23 @@ async function applyNow() {
  */
 function updateStatusItem(host, entry, zones) {
   const show = vscode.workspace.getConfiguration(hosts.SECTION).get('showStatusBarItem', true);
-  if (!host || !show) {
+  // En local, la pastille n'apparaît que pour les dossiers qui ont une couleur.
+  if (!host || !show || (!entry && !vscode.env.remoteName)) {
     statusItem.hide();
     return;
   }
-  const name = entry?.label ?? host;
+  const name = entry?.label ?? targets.describe(host).name;
   statusItem.text = `${entry ? '$(circle-filled)' : '$(circle-outline)'} ${name}`;
   // Si la barre d'état est déjà colorée, la pastille prend la couleur du texte.
   statusItem.color = entry && !zones.includes('statusBar') ? entry.color : undefined;
 
   const md = new vscode.MarkdownString(undefined, true);
-  md.appendMarkdown(`**SSH : ${host}**\n\n`);
-  if (!isEnabled()) md.appendMarkdown('Couleurs désactivées\n\n');
-  else if (entry) md.appendMarkdown(`Couleur : \`${entry.color}\`\n\n`);
-  else md.appendMarkdown('Aucune couleur définie\n\n');
-  if (!hasWorkspace()) md.appendMarkdown('_Ouvre un dossier pour colorer la fenêtre._\n\n');
-  md.appendMarkdown('Clic pour les options');
+  md.appendMarkdown(`**${displayName(host)}**\n\n`);
+  if (!isEnabled()) md.appendMarkdown(l10n.t('Colors disabled') + '\n\n');
+  else if (entry) md.appendMarkdown(l10n.t('Color: {0}', `\`${entry.color}\``) + '\n\n');
+  else md.appendMarkdown(l10n.t('No color set') + '\n\n');
+  if (!hasWorkspace()) md.appendMarkdown(`_${l10n.t('Open a folder to color the window.')}_\n\n`);
+  md.appendMarkdown(l10n.t('Click for options'));
   statusItem.tooltip = md;
   statusItem.show();
 }
@@ -191,41 +262,52 @@ async function writeColorCustomizations(wanted) {
 /** @param {unknown} [arg] */
 async function askHost(arg) {
   if (typeof arg === 'string' && arg) return arg;
-  const detected = getSshHost();
+  const detected = getCurrentKey();
   if (detected) return detected;
 
   const { readSshHosts } = require('./sshConfig');
   const known = new Set([...hosts.listEntries().map((e) => e.key), ...readSshHosts()]);
   const items = [...known].map((h) => ({ label: h, description: hosts.findEntry(h)?.color ?? '' }));
-  const typed = { label: '$(add) Saisir un autre host…', alwaysShow: true };
+  const typed = { label: `$(add) ${l10n.t('Enter another host…')}`, alwaysShow: true };
   const pick = await vscode.window.showQuickPick([...items, typed], {
-    placeHolder: 'Aucun host SSH détecté dans cette fenêtre — choisis un host',
+    placeHolder: l10n.t('No remote or folder detected in this window — pick an entry'),
   });
   if (!pick) return undefined;
   if (pick !== typed) return pick.label;
   return vscode.window.showInputBox({
-    prompt: "Nom du host (comme dans ~/.ssh/config). Les jokers '*' et '?' sont acceptés.",
-    placeHolder: 'ex : prod-server ou prod-*',
+    prompt: l10n.t(
+      "SSH host (as in ~/.ssh/config), or wsl:…, container:…, codespace:…, tunnel:…, folder:…. Wildcards '*' and '?' are allowed."
+    ),
+    placeHolder: l10n.t('e.g. prod-server or prod-*'),
   });
 }
 
 async function menuCommand() {
-  const host = getSshHost();
+  const host = getCurrentKey();
   const entry = host ? hosts.findEntry(host) : undefined;
-  /** @type {(vscode.QuickPickItem & { cmd?: string })[]} */
+  const { remote, folder } = getWindowKeys();
+  /** @type {(vscode.QuickPickItem & { cmd?: string, arg?: string })[]} */
   const items = [
-    { label: '$(symbol-color) Changer la couleur', cmd: 'sshHostColors.setColor' },
-    { label: '$(layout) Choisir les zones colorées', cmd: 'sshHostColors.configureZones' },
-    { label: '$(settings-gear) Ouvrir le gestionnaire', description: 'aperçu, tous les hosts', cmd: 'sshHostColors.openManager' },
+    { label: `$(symbol-color) ${l10n.t('Change Color')}`, cmd: 'sshHostColors.setColor' },
+    // Fenêtre distante sans couleur propre au dossier : proposer de colorer ce projet seul.
+    ...(remote && folder && host !== folder
+      ? [{ label: `$(folder) ${l10n.t('Color Only This Folder')}`, cmd: 'sshHostColors.setColor', arg: folder }]
+      : []),
+    { label: `$(layout) ${l10n.t('Choose Colored Areas')}`, cmd: 'sshHostColors.configureZones' },
+    {
+      label: `$(settings-gear) ${l10n.t('Open Manager')}`,
+      description: l10n.t('preview, all hosts'),
+      cmd: 'sshHostColors.openManager',
+    },
     { label: '', kind: vscode.QuickPickItemKind.Separator },
     {
-      label: isEnabled() ? '$(eye-closed) Désactiver les couleurs' : '$(eye) Activer les couleurs',
+      label: isEnabled() ? `$(eye-closed) ${l10n.t('Disable Colors')}` : `$(eye) ${l10n.t('Enable Colors')}`,
       cmd: 'sshHostColors.toggle',
     },
   ];
-  if (entry) items.push({ label: '$(trash) Supprimer la couleur de ce host', cmd: 'sshHostColors.removeColor' });
-  const pick = await vscode.window.showQuickPick(items, { placeHolder: host ? `SSH : ${host}` : 'SSH Host Colors' });
-  if (pick?.cmd) vscode.commands.executeCommand(pick.cmd);
+  if (entry) items.push({ label: `$(trash) ${l10n.t("Remove This Host's Color")}`, cmd: 'sshHostColors.removeColor' });
+  const pick = await vscode.window.showQuickPick(items, { placeHolder: host ? displayName(host) : 'Host Colors' });
+  if (pick?.cmd) vscode.commands.executeCommand(pick.cmd, pick.arg);
 }
 
 /** @param {unknown} [arg] */
@@ -233,24 +315,25 @@ async function setColorCommand(arg) {
   const host = await askHost(arg);
   if (!host) return;
   const entry = hosts.findEntry(host);
-  const live = host === getSshHost() && hasWorkspace() && isEnabled();
+  // Le dossier de la fenêtre passe avant l'environnement distant : il est toujours prévisualisable.
+  const live = (host === getCurrentKey() || host === getWindowKeys().folder) && hasWorkspace() && isEnabled();
 
   /** @type {(vscode.QuickPickItem & { color?: string, action?: 'custom' | 'random' })[]} */
   const items = [
     ...colors.PRESETS.map((p) => ({
-      label: `$(circle-filled) ${p.label}`,
-      description: p.color + (p.color === entry?.color ? '  · actuelle' : ''),
+      label: `$(circle-filled) ${l10n.t(p.label)}`,
+      description: p.color + (p.color === entry?.color ? `  · ${l10n.t('current')}` : ''),
       color: p.color,
     })),
     { label: '', kind: vscode.QuickPickItemKind.Separator },
-    { label: '$(edit) Couleur personnalisée…', description: 'code hexadécimal', action: 'custom' },
-    { label: '$(sparkle) Couleur aléatoire', action: 'random' },
+    { label: `$(edit) ${l10n.t('Custom color…')}`, description: l10n.t('hex code'), action: 'custom' },
+    { label: `$(sparkle) ${l10n.t('Random color')}`, action: 'random' },
   ];
 
   const qp = vscode.window.createQuickPick();
   qp.items = items;
-  qp.title = `Couleur pour « ${host} »`;
-  qp.placeholder = live ? 'Survole une couleur pour la prévisualiser sur la fenêtre' : 'Choisis une couleur';
+  qp.title = l10n.t('Color for “{0}”', host);
+  qp.placeholder = live ? l10n.t('Hover over a color to preview it on the window') : l10n.t('Pick a color');
   const currentItem = items.find((i) => i.color && i.color === entry?.color);
   if (currentItem) qp.activeItems = [currentItem];
 
@@ -270,13 +353,13 @@ async function setColorCommand(arg) {
     if (item?.action === 'random') color = colors.randomColor();
     if (item?.action === 'custom') {
       color = await vscode.window.showInputBox({
-        title: `Couleur pour « ${host} »`,
-        prompt: 'Couleur hexadécimale (aperçu en direct pendant la saisie)',
+        title: l10n.t('Color for “{0}”', host),
+        prompt: l10n.t('Hex color (live preview while typing)'),
         value: entry?.color ?? '#',
         validateInput: (v) => {
           const ok = colors.normalizeHex(v);
           if (ok) preview(ok);
-          return ok ? undefined : 'Format attendu : #rrggbb ou #rgb';
+          return ok ? undefined : l10n.t('Expected format: #rrggbb or #rgb');
         },
       });
     }
@@ -302,7 +385,7 @@ async function setColorCommand(arg) {
 
 /** @param {unknown} [arg] */
 async function configureZonesCommand(arg) {
-  const detected = getSshHost();
+  const detected = getCurrentKey();
   /** @type {'host' | 'defaults'} */
   let scope = 'defaults';
   let host = typeof arg === 'string' ? arg : detected;
@@ -310,10 +393,10 @@ async function configureZonesCommand(arg) {
   if (host) {
     const pick = await vscode.window.showQuickPick(
       [
-        { label: `$(server) Pour « ${host} » uniquement`, scope: /** @type {const} */ ('host') },
-        { label: '$(globe) Zones par défaut (tous les hosts)', scope: /** @type {const} */ ('defaults') },
+        { label: `$(server) ${l10n.t('For “{0}” only', host)}`, scope: /** @type {const} */ ('host') },
+        { label: `$(globe) ${l10n.t('Default areas (all hosts)')}`, scope: /** @type {const} */ ('defaults') },
       ],
-      { placeHolder: 'Quelles zones modifier ?' }
+      { placeHolder: l10n.t('Which areas do you want to change?') }
     );
     if (!pick) return;
     scope = pick.scope;
@@ -321,7 +404,7 @@ async function configureZonesCommand(arg) {
 
   const entry = host ? hosts.findEntry(host) : undefined;
   if (scope === 'host' && !entry) {
-    vscode.window.showInformationMessage(`« ${host} » n'a pas encore de couleur. Choisis-en une d'abord.`);
+    vscode.window.showInformationMessage(l10n.t('“{0}” has no color yet. Pick one first.', String(host)));
     return setColorCommand(host);
   }
 
@@ -330,9 +413,11 @@ async function configureZonesCommand(arg) {
 
   const qp = vscode.window.createQuickPick();
   qp.canSelectMany = true;
-  qp.title = scope === 'host' ? `Zones colorées pour « ${host} »` : 'Zones colorées par défaut';
-  qp.placeholder = live ? 'Coche / décoche : aperçu en direct. Entrée pour valider.' : 'Entrée pour valider';
-  const items = colors.ZONES.map((z) => ({ label: z.label, description: z.description, id: z.id }));
+  qp.title = scope === 'host' ? l10n.t('Colored areas for “{0}”', String(host)) : l10n.t('Default colored areas');
+  qp.placeholder = live
+    ? l10n.t('Check / uncheck: live preview. Press Enter to confirm.')
+    : l10n.t('Press Enter to confirm');
+  const items = colors.ZONES.map((z) => ({ label: l10n.t(z.label), description: l10n.t(z.description), id: z.id }));
   qp.items = items;
   qp.selectedItems = items.filter((i) => initial.includes(i.id));
 
@@ -369,14 +454,18 @@ async function removeColorCommand(arg) {
   if (!host) return;
   const entry = hosts.findEntry(host);
   if (!entry) {
-    vscode.window.showInformationMessage(`« ${host} » n'a pas de couleur.`);
+    vscode.window.showInformationMessage(l10n.t('“{0}” has no color.', host));
     return;
   }
   if (/[*?]/.test(entry.key)) {
     const ok = await vscode.window.showWarningMessage(
-      `La couleur de « ${host} » vient du motif « ${entry.key} ». Supprimer ce motif (et donc la couleur de tous les hosts qui y correspondent) ?`,
+      l10n.t(
+        'The color of “{0}” comes from the pattern “{1}”. Remove this pattern (and therefore the color of every host matching it)?',
+        host,
+        entry.key
+      ),
       { modal: true },
-      'Supprimer le motif'
+      l10n.t('Remove pattern')
     );
     if (!ok) return;
   }
@@ -387,35 +476,37 @@ async function removeAllCommand() {
   const count = hosts.listEntries().length;
   const ok = await vscode.window.showWarningMessage(
     count
-      ? `Supprimer les couleurs des ${count} host(s) configuré(s) ?`
-      : 'Aucun host configuré. Nettoyer quand même les couleurs restantes de cette fenêtre ?',
+      ? l10n.t('Remove the colors of the {0} configured host(s)?', count)
+      : l10n.t('No host configured. Clean up the remaining colors in this window anyway?'),
     {
       modal: true,
-      detail:
-        "Les fenêtres ouvertes sont nettoyées tout de suite, les autres le seront à leur prochaine ouverture. Tes propres personnalisations de couleurs ne sont pas touchées.",
+      detail: l10n.t(
+        'Open windows are cleaned right away, the others will be the next time they are opened. Your own color customizations are not touched.'
+      ),
     },
-    'Tout supprimer'
+    l10n.t('Remove All')
   );
   if (!ok) return;
   previewEntry = undefined;
   await hosts.deleteAllEntries();
   await apply();
-  vscode.window.showInformationMessage('Toutes les couleurs SSH ont été supprimées.');
+  vscode.window.showInformationMessage(l10n.t('All SSH colors have been removed.'));
 }
 
 async function cleanWorkspaceCommand() {
   if (!hasWorkspace()) {
-    vscode.window.showInformationMessage('Aucun dossier ouvert : rien à nettoyer.');
+    vscode.window.showInformationMessage(l10n.t('No folder open: nothing to clean.'));
     return;
   }
   const ok = await vscode.window.showWarningMessage(
-    'Retirer de ce workspace toutes les couleurs que cette extension peut écrire ?',
+    l10n.t('Remove from this workspace all the colors this extension can write?'),
     {
       modal: true,
-      detail:
-        "Utile si des couleurs sont restées bloquées. Attention : si tu as toi-même personnalisé ces mêmes zones dans .vscode/settings.json, elles seront aussi retirées. Pense à désactiver l'extension ou à supprimer la couleur du host, sinon elle sera réappliquée.",
+      detail: l10n.t(
+        "Useful if colors got stuck. Warning: if you customized these same areas yourself in .vscode/settings.json, they will be removed too. Remember to disable the extension or remove the host's color, otherwise it will be applied again."
+      ),
     },
-    'Nettoyer'
+    l10n.t('Clean')
   );
   if (!ok) return;
 
@@ -439,6 +530,6 @@ async function toggleCommand() {
 }
 
 /** Fonctions exposées au gestionnaire. */
-const api = { getSshHost, hasWorkspace, isEnabled, apply };
+const api = { getCurrentKey, getWindowKeys, hasWorkspace, isEnabled, apply };
 
 module.exports = { activate, deactivate };

@@ -6,7 +6,13 @@ const hosts = require('./hosts');
 const { readSshHosts } = require('./sshConfig');
 
 /**
- * @typedef {{ getSshHost: () => string | undefined, hasWorkspace: () => boolean, isEnabled: () => boolean, apply: () => Promise<void> }} Api
+ * @typedef {{
+ *   getCurrentKey: () => string | undefined,
+ *   getWindowKeys: () => { remote?: string, folder?: string },
+ *   hasWorkspace: () => boolean,
+ *   isEnabled: () => boolean,
+ *   apply: () => Promise<void>,
+ * }} Api
  */
 
 class ManagerPanel {
@@ -36,7 +42,7 @@ class ManagerPanel {
   constructor(context, api) {
     this.api = api;
     const mediaRoot = vscode.Uri.joinPath(context.extensionUri, 'media');
-    this.panel = vscode.window.createWebviewPanel('sshHostColors.manager', 'SSH Host Colors', vscode.ViewColumn.Active, {
+    this.panel = vscode.window.createWebviewPanel('sshHostColors.manager', 'Host Colors', vscode.ViewColumn.Active, {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [mediaRoot],
@@ -48,7 +54,7 @@ class ManagerPanel {
   }
 
   postState() {
-    const currentHost = this.api.getSshHost();
+    const currentHost = this.api.getCurrentKey();
     const current = currentHost ? hosts.findEntry(currentHost) : undefined;
     this.panel.webview.postMessage({
       type: 'state',
@@ -57,6 +63,7 @@ class ManagerPanel {
       sshHosts: readSshHosts(),
       currentHost,
       currentKey: current?.key,
+      windowKeys: this.api.getWindowKeys(),
       hasWorkspace: this.api.hasWorkspace(),
       enabled: this.api.isEnabled(),
     });
@@ -74,7 +81,7 @@ class ManagerPanel {
           const color = colors.normalizeHex(m.color);
           if (!name || !color) return;
           if (name !== m.originalName && hosts.listEntries().some((e) => e.key === name)) {
-            vscode.window.showErrorMessage(`Le host « ${name} » existe déjà.`);
+            vscode.window.showErrorMessage(vscode.l10n.t('Host “{0}” already exists.', name));
             return this.postState();
           }
           const zones = Array.isArray(m.elements) ? m.elements.filter((z) => typeof z === 'string') : undefined;
@@ -84,9 +91,9 @@ class ManagerPanel {
 
         case 'deleteHost': {
           const ok = await vscode.window.showWarningMessage(
-            `Supprimer la couleur de « ${m.name} » ?`,
+            vscode.l10n.t('Remove the color of “{0}”?', String(m.name)),
             { modal: true },
-            'Supprimer'
+            vscode.l10n.t('Remove')
           );
           if (ok) await hosts.deleteEntry(m.name);
           return;
@@ -111,9 +118,15 @@ class ManagerPanel {
 
         case 'openSettingsJson':
           return vscode.commands.executeCommand('workbench.action.openSettingsJson');
+
+        case 'exportConfig':
+          return vscode.commands.executeCommand('sshHostColors.export');
+
+        case 'importConfig':
+          return vscode.commands.executeCommand('sshHostColors.import');
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`SSH Host Colors : ${err instanceof Error ? err.message : err}`);
+      vscode.window.showErrorMessage(`Host Colors: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -122,18 +135,23 @@ class ManagerPanel {
     const webview = this.panel.webview;
     const nonce = crypto.randomBytes(16).toString('base64');
     const uri = (/** @type {string} */ f) => webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, f));
+    // Traductions passées au webview (vide en anglais : les clés sont les textes anglais).
+    const bundle = JSON.stringify(vscode.l10n.bundle ?? {}).replace(/</g, '\\u003c');
+    const lang = vscode.env.language.replace(/[^\w-]/g, '');
     return /* html */ `<!DOCTYPE html>
-<html lang="fr">
+<html lang="${lang}">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${uri('panel.css')}">
-  <title>SSH Host Colors</title>
+  <title>Host Colors</title>
 </head>
 <body>
   <div id="app"></div>
+  <script nonce="${nonce}">window.SSH_HOST_COLORS_L10N = ${bundle};</script>
   <script nonce="${nonce}" src="${uri('colors.js')}"></script>
+  <script nonce="${nonce}" src="${uri('targets.js')}"></script>
   <script nonce="${nonce}" src="${uri('panel.js')}"></script>
 </body>
 </html>`;

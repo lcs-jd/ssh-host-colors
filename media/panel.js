@@ -4,10 +4,27 @@
   const vscode = acquireVsCodeApi();
   // @ts-ignore
   const C = window.SshHostColors;
+  // @ts-ignore
+  const T = window.SshHostColorsTargets;
+  /** @type {Record<string, string>} */
+  // @ts-ignore
+  const L10N = window.SSH_HOST_COLORS_L10N || {};
+
+  /**
+   * Traduit un texte anglais ({0}, {1}… remplacés par les arguments).
+   * @param {string} msg
+   * @param {...unknown} args
+   */
+  const t = (msg, ...args) =>
+    (L10N[msg] ?? msg).replace(/\{(\d+)\}/g, (m, i) => (i < args.length ? String(args[i]) : m));
 
   /**
    * @typedef {{ key: string, color: string, elements?: string[], label?: string }} HostEntry
-   * @typedef {{ hosts: HostEntry[], defaults: string[], sshHosts: string[], currentHost?: string, currentKey?: string, hasWorkspace: boolean, enabled: boolean }} State
+   * @typedef {{
+   *   hosts: HostEntry[], defaults: string[], sshHosts: string[],
+   *   currentHost?: string, currentKey?: string, windowKeys: { remote?: string, folder?: string },
+   *   hasWorkspace: boolean, enabled: boolean,
+   * }} State
    * @typedef {{ originalName: string, name: string, label: string, color: string, custom: boolean, elements: string[] }} Draft
    */
 
@@ -40,17 +57,19 @@
       <div class="brand">
         <span class="logo"></span>
         <div>
-          <h1>SSH Host Colors</h1>
+          <h1>Host Colors</h1>
           <p class="muted" id="status-line"></p>
         </div>
       </div>
       <div class="actions">
-        <label class="switch" title="Activer / désactiver toutes les couleurs">
-          <input type="checkbox" id="enabled"><span class="slider"></span><span>Activé</span>
+        <label class="switch" title="${t('Enable / disable all colors')}">
+          <input type="checkbox" id="enabled"><span class="slider"></span><span>${t('Enabled')}</span>
         </label>
-        <button class="secondary" data-cmd="openSettingsJson" title="Ouvrir settings.json">settings.json</button>
-        <button class="secondary" data-cmd="cleanWorkspace" id="clean-btn" title="Retirer les couleurs restées bloquées dans ce workspace">Nettoyer ce workspace</button>
-        <button class="danger" data-cmd="removeAll">Tout supprimer</button>
+        <button class="secondary" data-cmd="importConfig">${t('Import…')}</button>
+        <button class="secondary" data-cmd="exportConfig">${t('Export…')}</button>
+        <button class="secondary" data-cmd="openSettingsJson" title="${t('Open settings.json')}">settings.json</button>
+        <button class="secondary" data-cmd="cleanWorkspace" id="clean-btn" title="${t('Remove colors stuck in this workspace')}">${t('Clean this workspace')}</button>
+        <button class="danger" data-cmd="removeAll">${t('Remove All')}</button>
       </div>
     </header>
 
@@ -62,16 +81,16 @@
           <h2>Hosts <span class="count" id="count"></span></h2>
           <ul class="host-list" id="host-list"></ul>
           <form id="add-form" class="add">
-            <input id="add-input" list="ssh-hosts" placeholder="Nom du host ou motif (prod-*)" autocomplete="off">
+            <input id="add-input" list="ssh-hosts" placeholder="${t('Host name or pattern (prod-*)')}" autocomplete="off">
             <datalist id="ssh-hosts"></datalist>
-            <button type="submit">Ajouter</button>
+            <button type="submit">${t('Add')}</button>
           </form>
           <div id="suggestions"></div>
         </section>
 
         <section class="card">
-          <h2>Zones par défaut</h2>
-          <p class="muted small">Utilisées par tous les hosts qui n'ont pas leurs propres zones.</p>
+          <h2>${t('Default areas')}</h2>
+          <p class="muted small">${t("Used by every host that doesn't have its own areas.")}</p>
           <div class="zones" id="default-zones"></div>
         </section>
       </aside>
@@ -223,22 +242,37 @@
     const line = $('#status-line');
     if (state.currentHost) {
       const entry = state.hosts.find((h) => h.key === state?.currentKey);
-      line.innerHTML = `Connecté à <b>${esc(state.currentHost)}</b>${
-        entry ? ` · <span class="dot" style="background:${entry.color}"></span>${esc(entry.color)}` : ' · pas de couleur'
+      line.innerHTML = `${t('This window: {0}', `<b>${esc(windowName(state.currentHost))}</b>`)}${
+        entry ? ` · <span class="dot" style="background:${entry.color}"></span>${esc(entry.color)}` : ` · ${t('no color')}`
       }`;
     } else {
-      line.textContent = 'Fenêtre locale — les couleurs s’appliquent aux fenêtres connectées en SSH.';
+      line.textContent = t('No folder open in this window.');
     }
 
     const banner = $('#banner');
     banner.innerHTML = '';
     if (!state.enabled) {
-      banner.innerHTML = `<div class="banner warn">Les couleurs sont désactivées. Réactive-les avec l’interrupteur en haut.</div>`;
+      banner.innerHTML = `<div class="banner warn">${t('Colors are disabled. Turn them back on with the switch at the top.')}</div>`;
     } else if (state.currentHost && !state.hasWorkspace) {
-      banner.innerHTML = `<div class="banner warn">Aucun dossier ouvert sur <b>${esc(
-        state.currentHost
-      )}</b> : VS Code ne permet de colorer la fenêtre qu’avec un dossier ou un workspace ouvert.</div>`;
+      banner.innerHTML = `<div class="banner warn">${t(
+        'No folder open on {0}: VS Code can only color the window when a folder or workspace is open.',
+        `<b>${esc(windowName(state.currentHost))}</b>`
+      )}</div>`;
     }
+  }
+
+  /** Nom lisible d'une clé : « SSH: prod », « WSL: Ubuntu », « Dossier : api »… */
+  function windowName(/** @type {string} */ key) {
+    const d = T.describe(key);
+    return d.kind === 'folder' ? t('Folder: {0}', d.name) : d.remote;
+  }
+
+  /** Libellé court du type de clé (vide pour SSH). */
+  function kindTag(/** @type {string} */ key) {
+    const kind = T.kindOf(key);
+    return { ssh: '', folder: t('folder'), wsl: 'WSL', container: t('container'), codespace: 'Codespace', tunnel: t('tunnel') }[
+      /** @type {string} */ (kind)
+    ];
   }
 
   function renderList() {
@@ -246,21 +280,25 @@
     $('#count').textContent = String(state.hosts.length);
     const list = $('#host-list');
     if (!state.hosts.length) {
-      list.innerHTML = `<li class="empty muted">Aucun host. Ajoute-en un ci-dessous.</li>`;
+      list.innerHTML = `<li class="empty muted">${t('No hosts. Add one below.')}</li>`;
       return;
     }
     list.innerHTML = state.hosts
       .map((h) => {
         const color = h.key === draft?.originalName ? draft.color : h.color;
         const tags = [];
-        if (h.key === state?.currentKey) tags.push('<span class="tag live">connecté</span>');
-        if (/[*?]/.test(h.key)) tags.push('<span class="tag">motif</span>');
-        if (h.elements) tags.push('<span class="tag">zones perso</span>');
-        return `<li class="host ${h.key === selected ? 'selected' : ''}" data-host="${esc(h.key)}" tabindex="0">
+        if (h.key === state?.currentKey) tags.push(`<span class="tag live">${t('this window')}</span>`);
+        const kind = kindTag(h.key);
+        if (kind) tags.push(`<span class="tag">${esc(kind)}</span>`);
+        if (/[*?]/.test(h.key)) tags.push(`<span class="tag">${t('pattern')}</span>`);
+        if (h.elements) tags.push(`<span class="tag">${t('custom areas')}</span>`);
+        // Les dossiers s'affichent par leur nom, le chemin complet en dessous.
+        const title = h.label || (T.kindOf(h.key) === 'folder' ? T.describe(h.key).name : h.key);
+        return `<li class="host ${h.key === selected ? 'selected' : ''}" data-host="${esc(h.key)}" tabindex="0" title="${esc(h.key)}">
           <span class="swatch" style="background:${color}"></span>
           <span class="host-name">
-            <span>${esc(h.label || h.key)}</span>
-            ${h.label ? `<span class="muted small">${esc(h.key)}</span>` : ''}
+            <span>${esc(title)}</span>
+            ${title !== h.key ? `<span class="muted small">${esc(h.key)}</span>` : ''}
           </span>
           <span class="tags">${tags.join('')}</span>
         </li>`;
@@ -279,12 +317,23 @@
     const configured = new Set(state.hosts.map((h) => h.key.toLowerCase()));
     $('#ssh-hosts').innerHTML = state.sshHosts.map((h) => `<option value="${esc(h)}">`).join('');
     const missing = state.sshHosts.filter((h) => !configured.has(h.toLowerCase()));
-    $('#suggestions').innerHTML = missing.length
-      ? `<p class="muted small">Dans ton ~/.ssh/config :</p>
-         <div class="chips">${missing
-           .map((h) => `<button class="chip" data-add="${esc(h)}" title="Ajouter ${esc(h)}">+ ${esc(h)}</button>`)
-           .join('')}</div>`
-      : '';
+    /** @param {string} key @param {string} text */
+    const chip = (key, text) =>
+      `<button class="chip" data-add="${esc(key)}" title="${t('Add {0}', esc(key))}">+ ${esc(text)}</button>`;
+
+    // L'environnement distant et le dossier de cette fenêtre, s'ils n'ont pas encore d'entrée.
+    const { remote, folder } = state.windowKeys ?? {};
+    const own = [];
+    if (remote && !configured.has(remote.toLowerCase()) && !state.sshHosts.includes(remote))
+      own.push(chip(remote, T.describe(remote).remote));
+    if (folder && !configured.has(folder.toLowerCase())) own.push(chip(folder, t('This folder ({0})', T.describe(folder).name)));
+
+    $('#suggestions').innerHTML =
+      (own.length ? `<p class="muted small">${t('This window:')}</p><div class="chips">${own.join('')}</div>` : '') +
+      (missing.length
+        ? `<p class="muted small">${t('In your ~/.ssh/config:')}</p>
+           <div class="chips">${missing.map((h) => chip(h, h)).join('')}</div>`
+        : '');
     $$('#suggestions [data-add]').forEach((b) => b.addEventListener('click', () => addHost(b.dataset.add ?? '')));
   }
 
@@ -296,9 +345,9 @@
    */
   function renderZones(container, active, disabled, onChange) {
     container.innerHTML = C.ZONES.map(
-      (/** @type {any} */ z) => `<label class="zone ${disabled ? 'disabled' : ''}" title="${esc(z.description)}">
+      (/** @type {any} */ z) => `<label class="zone ${disabled ? 'disabled' : ''}" title="${esc(t(z.description))}">
         <input type="checkbox" value="${z.id}" ${active.includes(z.id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-        <span><b>${esc(z.label)}</b><span class="muted small">${esc(z.description)}</span></span>
+        <span><b>${esc(t(z.label))}</b><span class="muted small">${esc(t(z.description))}</span></span>
       </label>`
     ).join('');
     container.querySelectorAll('input').forEach((input) =>
@@ -327,8 +376,8 @@
     if (!state || !draft) {
       editor.innerHTML = `<div class="empty-editor">
         <div class="big-swatch"></div>
-        <h2>Aucun host sélectionné</h2>
-        <p class="muted">Ajoute un host à gauche pour choisir sa couleur et voir l’aperçu.</p>
+        <h2>${t('No host selected')}</h2>
+        <p class="muted">${t('Add a host on the left to choose its color and see the preview.')}</p>
       </div>`;
       return;
     }
@@ -336,50 +385,50 @@
     editor.innerHTML = `
       <div class="editor-head">
         <h2>${esc(d.label || d.name)}</h2>
-        <button class="danger ghost" id="delete-host">Supprimer</button>
+        <button class="danger ghost" id="delete-host">${t('Remove')}</button>
       </div>
 
       <div class="grid2">
         <label class="field">
-          <span>Host <span class="muted small">(nom dans ~/.ssh/config, jokers * ?)</span></span>
+          <span>${t('Host')} <span class="muted small">${t('(SSH host, or wsl:… container:… folder:…, wildcards * ?)')}</span></span>
           <input id="f-name" value="${esc(d.name)}" list="ssh-hosts" autocomplete="off">
         </label>
         <label class="field">
-          <span>Libellé <span class="muted small">(optionnel, affiché dans la barre d’état)</span></span>
+          <span>${t('Label')} <span class="muted small">${t('(optional, shown in the status bar)')}</span></span>
           <input id="f-label" value="${esc(d.label)}" placeholder="${esc(d.name)}">
         </label>
       </div>
 
       <div class="field">
-        <span>Couleur</span>
+        <span>${t('Color')}</span>
         <div class="color-row">
           <input type="color" id="f-color" value="${d.color}">
           <input id="f-hex" class="hex" value="${d.color}" maxlength="7" spellcheck="false">
-          <button class="secondary" id="random">Aléatoire</button>
+          <button class="secondary" id="random">${t('Random')}</button>
         </div>
         <div class="presets" id="presets">
           ${C.PRESETS.map(
             (/** @type {any} */ p) =>
-              `<button class="preset" data-color="${p.color}" title="${esc(p.label)} ${p.color}" style="background:${p.color}"></button>`
+              `<button class="preset" data-color="${p.color}" title="${esc(t(p.label))} ${p.color}" style="background:${p.color}"></button>`
           ).join('')}
         </div>
       </div>
 
       <div class="field">
-        <span>Zones à colorer</span>
+        <span>${t('Areas to color')}</span>
         <div class="segmented">
-          <label><input type="radio" name="zmode" value="default" ${d.custom ? '' : 'checked'}> Zones par défaut</label>
-          <label><input type="radio" name="zmode" value="custom" ${d.custom ? 'checked' : ''}> Zones personnalisées</label>
+          <label><input type="radio" name="zmode" value="default" ${d.custom ? '' : 'checked'}> ${t('Default areas')}</label>
+          <label><input type="radio" name="zmode" value="custom" ${d.custom ? 'checked' : ''}> ${t('Custom areas')}</label>
         </div>
         <div class="zones" id="host-zones"></div>
       </div>
 
       <div class="field">
         <div class="preview-head">
-          <span>Aperçu</span>
+          <span>${t('Preview')}</span>
           <div class="segmented small">
-            <label><input type="radio" name="pmode" value="active" ${previewActive ? 'checked' : ''}> Fenêtre active</label>
-            <label><input type="radio" name="pmode" value="inactive" ${previewActive ? '' : 'checked'}> Inactive</label>
+            <label><input type="radio" name="pmode" value="active" ${previewActive ? 'checked' : ''}> ${t('Active window')}</label>
+            <label><input type="radio" name="pmode" value="inactive" ${previewActive ? '' : 'checked'}> ${t('Inactive')}</label>
           </div>
         </div>
         ${mockHtml()}
@@ -499,15 +548,15 @@
       <div class="mock" id="mock">
         <div class="m-title" id="m-title">
           <span class="m-dots"><i></i><i></i><i></i></span>
-          <span class="m-menu">Fichier&nbsp;&nbsp;Édition&nbsp;&nbsp;Affichage</span>
-          <span class="m-cc" id="m-cc">⌕ projet [SSH: <span id="m-host"></span>]</span>
+          <span class="m-menu">${[t('File'), t('Edit'), t('View')].map(esc).join('&nbsp;&nbsp;')}</span>
+          <span class="m-cc" id="m-cc">⌕ <span class="m-project"></span><span id="m-cc-remote"></span></span>
           <span></span>
         </div>
         <div class="m-body">
           <div class="m-activity" id="m-activity">${icons}</div>
           <div class="m-sidebar" id="m-sidebar">
-            <div class="m-sb-title">EXPLORATEUR</div>
-            <div class="m-file">▾ projet</div>
+            <div class="m-sb-title">${esc(t('EXPLORER'))}</div>
+            <div class="m-file">▾ <span class="m-project"></span></div>
             <div class="m-file in active">deploy.py</div>
             <div class="m-file in">README.md</div>
             <div class="m-file in">.env</div>
@@ -519,13 +568,13 @@
             </div>
             <div class="m-editor">${code}</div>
             <div class="m-panel" id="m-panel">
-              <div class="m-panel-tabs"><span class="active" id="m-panel-active">TERMINAL</span><span>PROBLÈMES</span></div>
+              <div class="m-panel-tabs"><span class="active" id="m-panel-active">TERMINAL</span><span>${esc(t('PROBLEMS'))}</span></div>
               <div class="m-term">user@<span class="m-host-term"></span>:~$ <span class="m-cursor"></span></div>
             </div>
           </div>
         </div>
         <div class="m-status" id="m-status">
-          <span class="m-remote" id="m-remote">⇋ SSH:&nbsp;<span class="m-host-remote"></span></span>
+          <span class="m-remote" id="m-remote">⇋&nbsp;<span class="m-host-remote"></span></span>
           <span class="m-status-item">⑂ main</span>
           <span class="m-status-item">⊗ 0  ⚠ 0</span>
           <span class="m-spacer"></span>
@@ -600,20 +649,26 @@
       color: v('statusBarItem.remoteForeground', '#fff'),
     });
 
-    const hostText = d.name.replace(/[*?]/g, 'x');
-    mock.querySelectorAll('#m-host, .m-host-term, .m-host-remote').forEach((el) => (el.textContent = hostText));
+    // Textes de la fausse fenêtre selon le type d'entrée (les jokers deviennent des « x »).
+    const info = T.describe(d.name.replace(/[*?]/g, 'x'));
+    const fill = (/** @type {string} */ sel, /** @type {string} */ text) =>
+      mock.querySelectorAll(sel).forEach((el) => (el.textContent = text));
+    fill('.m-project', info.kind === 'folder' ? info.name : t('project'));
+    fill('#m-cc-remote', info.remote ? ` [${info.remote}]` : '');
+    fill('.m-host-remote', info.remote ?? '');
+    fill('.m-host-term', info.kind === 'folder' ? 'localhost' : info.name);
     const ext = /** @type {HTMLElement} */ (mock.querySelector('#m-ext-item'));
-    ext.textContent = `● ${d.label || hostText}`;
+    ext.textContent = `● ${d.label || info.name}`;
     ext.style.color = zones.includes('statusBar') ? '' : d.color;
 
     const hint = app.querySelector('#live-hint');
     if (hint) {
       const live = state.currentKey === d.originalName && state.hasWorkspace && state.enabled;
       hint.textContent = live
-        ? 'Tu es connecté à ce host : les changements s’appliquent aussi en direct sur cette fenêtre.'
+        ? t('This entry applies to the current window: changes are also applied live.')
         : zones.length
           ? ''
-          : 'Aucune zone sélectionnée : seule la pastille de la barre d’état sera colorée.';
+          : t('No area selected: only the status bar dot will be colored.');
     }
   }
 
