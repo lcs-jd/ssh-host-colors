@@ -1,0 +1,212 @@
+{
+  "name": "ssh-host-colors",
+  "displayName": "SSH Host Colors",
+  "description": "Colore l'interface de VS Code selon le serveur SSH auquel tu es connecté, avec aperçu en direct.",
+  "version": "0.2.0",
+  "publisher": "lcs-jd",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e2129",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lcs-jd/ssh-host-colors.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lcs-jd/ssh-host-colors/issues"
+  },
+  "homepage": "https://github.com/lcs-jd/ssh-host-colors#readme",
+  "pricing": "Free",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other",
+    "Themes"
+  ],
+  "keywords": [
+    "ssh",
+    "remote",
+    "remote-ssh",
+    "color",
+    "colour",
+    "titlebar",
+    "statusbar",
+    "server",
+    "production",
+    "peacock"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sshHostColors.openManager",
+        "title": "Ouvrir le gestionnaire",
+        "category": "SSH Host Colors",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "sshHostColors.setColor",
+        "title": "Choisir la couleur (aperçu en direct)",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.configureZones",
+        "title": "Choisir les zones colorées",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.toggle",
+        "title": "Activer / désactiver les couleurs",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.removeColor",
+        "title": "Supprimer la couleur d'un host",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.removeAll",
+        "title": "Tout supprimer",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.cleanWorkspace",
+        "title": "Nettoyer les couleurs de ce workspace",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.refresh",
+        "title": "Réappliquer les couleurs",
+        "category": "SSH Host Colors"
+      },
+      {
+        "command": "sshHostColors.menu",
+        "title": "Menu",
+        "category": "SSH Host Colors"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "sshHostColors.menu",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SSH Host Colors",
+      "properties": {
+        "sshHostColors.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Active la coloration des fenêtres SSH.",
+          "scope": "application"
+        },
+        "sshHostColors.hosts": {
+          "type": "object",
+          "default": {},
+          "scope": "application",
+          "markdownDescription": "Couleur par host SSH (nom tel que dans `~/.ssh/config`, jokers `*` et `?` acceptés). La valeur peut être une couleur, ou un objet avec des zones et un libellé propres.\n\n```json\n{\n  \"prod-*\": \"#c0392b\",\n  \"dev\": { \"color\": \"#27ae60\", \"elements\": [\"statusBar\"], \"label\": \"DEV\" }\n}\n```\n\nLe plus simple : commande **SSH Host Colors: Ouvrir le gestionnaire**.",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "color"
+                ],
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "Nom affiché dans la barre d'état."
+                  },
+                  "elements": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "description": "Zones colorées pour ce host (remplace les zones par défaut).",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "titleBar",
+                        "commandCenter",
+                        "activityBar",
+                        "statusBar",
+                        "remoteIndicator",
+                        "activeTab",
+                        "sideBarBorder",
+                        "panelBorder",
+                        "windowBorder"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "sshHostColors.elements": {
+          "type": "array",
+          "default": [
+            "titleBar",
+            "activityBar",
+            "statusBar"
+          ],
+          "uniqueItems": true,
+          "description": "Zones colorées par défaut.",
+          "scope": "application",
+          "items": {
+            "type": "string",
+            "enum": [
+              "titleBar",
+              "commandCenter",
+              "activityBar",
+              "statusBar",
+              "remoteIndicator",
+              "activeTab",
+              "sideBarBorder",
+              "panelBorder",
+              "windowBorder"
+            ],
+            "enumDescriptions": [
+              "Barre de titre",
+              "Centre de commandes (recherche en haut)",
+              "Barre d'activité (icônes à gauche)",
+              "Barre d'état (en bas)",
+              "Indicateur distant « SSH: … »",
+              "Liseré de l'onglet actif",
+              "Bordure de la barre latérale",
+              "Bordure du panneau (terminal)",
+              "Bordure de la fenêtre (Windows/Linux)"
+            ]
+          }
+        },
+        "sshHostColors.showStatusBarItem": {
+          "type": "boolean",
+          "default": true,
+          "description": "Affiche le nom du host avec une pastille de couleur dans la barre d'état.",
+          "scope": "application"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "npx --yes @vscode/vsce package",
+    "publish": "npx --yes @vscode/vsce publish"
+  }
+}

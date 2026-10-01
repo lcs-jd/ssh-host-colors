@@ -1,0 +1,51 @@
+# Publie l'extension quand un tag vX.Y.Z est poussé :
+#   git tag v0.2.0 && git push origin v0.2.0
+# Secrets à créer dans GitHub (Settings > Secrets and variables > Actions) :
+#   VSCE_PAT  : token Azure DevOps (Marketplace > Manage)
+#   OVSX_PAT  : token open-vsx.org (optionnel)
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Vérifier que le tag correspond à la version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          [ "$PKG" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} ≠ package.json ${PKG}"; exit 1; }
+
+      - name: Empaqueter
+        run: npx --yes @vscode/vsce package -o extension.vsix
+
+      - name: Publier sur le Visual Studio Marketplace
+        run: npx --yes @vscode/vsce publish --packagePath extension.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publier sur Open VSX
+        if: env.OVSX_PAT != ''
+        run: npx --yes ovsx publish extension.vsix
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+      - name: Release GitHub
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension.vsix
+          generate_release_notes: true
